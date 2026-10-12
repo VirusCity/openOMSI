@@ -113,6 +113,9 @@ pub struct Launcher {
     /// the pictures tried so far.
     show: bool,
     tries: u32,
+    /// The window is gamescope's (see `resumed`): filled to the screen, and its reported
+    /// scale factor left out of `ui_scale`.
+    gamescope: bool,
     gpu: Option<omsi_ui::Gpu>,
     ui: Ui,
     state: state::State,
@@ -207,6 +210,7 @@ impl Launcher {
         starting: None,
         dev: None,
         show: false,
+        gamescope: false,
         tries: 0,
         gpu: None,
         ui: Ui::new(),
@@ -391,7 +395,15 @@ impl ApplicationHandler for Launcher {
             None => host().fit_window(event_loop, 1440.0, 880.0),
         };
         let mut attrs = Window::default_attributes().with_title("openOMSI").with_window_icon(host().window_icon()).with_inner_size(fit);
-        if !mobile::mobile() {
+        // (a Steam Deck's Gaming Mode: gamescope shows one window over the whole screen, as
+        // the game's window does there - unless OMSI_LAUNCHER_SIZE names a size. No minimum
+        // size or place then: in points at its >1 scale the minimum was larger than the
+        // 1280 x 800 screen)
+        let gamescope = asked.is_none() && !mobile::mobile() && host().under_gamescope();
+        if gamescope {
+            log::info!("gamescope (Steam Deck Gaming Mode): the launcher fills the screen");
+            attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        } else if !mobile::mobile() {
             // (no bigger than the window fitted to the screen: a small one at 150 % has less)
             attrs = attrs.with_min_inner_size(winit::dpi::LogicalSize::new(1080.0f64.min(fit.width), 680.0f64.min(fit.height)));
             if let Some(at) = at {
@@ -409,6 +421,7 @@ impl ApplicationHandler for Launcher {
             attrs = attrs.with_visible(false);
             self.show = true;
         }
+        self.gamescope = gamescope;
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -648,19 +661,18 @@ impl Launcher {
     /// little with a smaller one, so that it fills the window the same way at any size.
     fn ui_scale(&self) -> f32 {
         let Some(w) = self.window.as_ref() else { return 1.0 };
-        let dpi = w.scale_factor() as f32;
+        // (gamescope's Xwayland reports a scale factor above 1 for the Deck's screen: with it
+        // the zoom's floor left less room than the pages need, and they were cut off)
+        let dpi = if self.gamescope { 1.0 } else { w.scale_factor() as f32 };
         let s = w.inner_size();
-        let (lw, lh) = (s.width as f32 / dpi, s.height as f32 / dpi);
         if mobile::mobile() {
+            let lh = s.height as f32 / dpi;
             // a phone held across: the text at least at the system's own size - smaller, it
             // was hard to read and the buttons hard to hit (the pages scroll where the screen
             // is lower than they are, and lay themselves out for its width), a tablet larger
             return dpi * (lh / 400.0).clamp(1.0, 1.35);
         }
-        // (the height counts a little less: on a wide, low screen - 2560 x 1080 - the text
-        // stayed the size of a 1440 x 880 window's, tiny across the width; the pages scroll or
-        // keep their width, see `draw_ui`)
-        dpi * (lw / 1440.0).min(lh / 820.0).clamp(0.8, 2.2)
+        desktop_scale(dpi, s.width as f32, s.height as f32)
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1412,4 +1424,40 @@ fn root_incomplete(root: &str) -> bool {
     let v = !omsi_cfg::missing_original_essentials(std::path::Path::new(root)).is_empty();
     *last = Some((root.to_string(), Instant::now(), v));
     v
+}
+
+/// `Launcher::ui_scale` for a desktop window of `w` x `h` pixels at the screen's scale `dpi`.
+fn desktop_scale(dpi: f32, w: f32, h: f32) -> f32 {
+    // (the height counts a little less: on a wide, low screen - 2560 x 1080 - the text
+    // stayed the size of a 1440 x 880 window's, tiny across the width; the pages scroll or
+    // keep their width, see `draw_ui`)
+    dpi * (w / dpi / 1440.0).min(h / dpi / 820.0).clamp(0.8, 2.2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_scale;
+
+    /// The room the pages get (interface pixels) in a `w` x `h` window at `dpi`.
+    fn room(dpi: f32, w: f32, h: f32) -> (f32, f32) {
+        let s = desktop_scale(dpi, w, h);
+        (w / s, h / s)
+    }
+
+    #[test]
+    fn steam_deck_screen_fits_the_pages() {
+        // (the launcher's smallest window is 1080 x 680 points)
+        let (w, h) = room(1.0, 1280.0, 800.0);
+        assert!(w >= 1080.0 && h >= 680.0, "{w}x{h}");
+        // the scale gamescope reported: the zoom's floor cut the pages off
+        let (w, h) = room(1.5, 1280.0, 800.0);
+        assert!(w < 1080.0 || h < 680.0, "{w}x{h}");
+    }
+
+    #[test]
+    fn desktop_scale_follows_window_and_screen() {
+        assert!((desktop_scale(1.0, 1440.0, 820.0) - 1.0).abs() < 1e-5);
+        assert!((desktop_scale(2.0, 2880.0, 1640.0) - 2.0).abs() < 1e-5);
+        assert!((desktop_scale(1.0, 1280.0, 800.0) - 1280.0 / 1440.0).abs() < 1e-5);
+    }
 }

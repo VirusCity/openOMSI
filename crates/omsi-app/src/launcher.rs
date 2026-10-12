@@ -111,6 +111,9 @@ impl Host for AppHost {
     fn window_icon(&self) -> Option<winit::window::Icon> {
         crate::startup::window_icon()
     }
+    fn under_gamescope(&self) -> bool {
+        crate::startup::under_gamescope()
+    }
     fn fit_window(&self, event_loop: &winit::event_loop::ActiveEventLoop, w: f64, h: f64) -> (winit::dpi::LogicalSize<f64>, Option<winit::dpi::PhysicalPosition<i32>>) {
         crate::startup::fit_window(event_loop, w, h)
     }
