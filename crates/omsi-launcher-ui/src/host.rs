@@ -66,6 +66,11 @@ pub trait Host: Send + Sync {
     fn window_icon(&self) -> Option<winit::window::Icon> {
         None
     }
+    /// The launcher runs inside gamescope (a Steam Deck's Gaming Mode): one window over the
+    /// whole screen, and a scale factor its Xwayland reports that is not the screen's.
+    fn under_gamescope(&self) -> bool {
+        false
+    }
     /// The launcher's window size and place, fitted to the screen it opens on.
     fn fit_window(&self, _event_loop: &ActiveEventLoop, w: f64, h: f64) -> (winit::dpi::LogicalSize<f64>, Option<winit::dpi::PhysicalPosition<i32>>) {
         (winit::dpi::LogicalSize::new(w, h), None)
